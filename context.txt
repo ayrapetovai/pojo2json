@@ -55,6 +55,9 @@ field. Use cases: generating example payloads, docs, test fixtures.
   (`class_declaration`/`interface_declaration`/`record_declaration` →
   fields; `enum_declaration` → constants). Simple-name lookup is used; sibling
   classes with equal simple names could collide (acceptable for sample data).
+- Recursion guard: `generate_object` tracks `ctx.depth` (max `MAX_DEPTH = 6`)
+  and emits `null` once exceeded. REQUIRED — recursive type graphs
+  (`A`→`B`→`A`) otherwise blow the stack (caught in the `Nested.java` test).
 - Fields: iterate `class_body` `field_declaration` children; each
   `variable_declarator` becomes one field (multi-declarator split).
 - Records: fields from the record `parameters` `formal_parameter` nodes.

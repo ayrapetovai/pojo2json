@@ -36,7 +36,10 @@ struct Ctx {
     classes: HashMap<String, GenClass>,
     enums: HashMap<String, Vec<String>>,
     rng: Rng,
+    depth: usize,
 }
+
+const MAX_DEPTH: usize = 6;
 
 // Small deterministic PRNG (xorshift64) so we avoid a runtime dependency.
 struct Rng {
@@ -316,15 +319,23 @@ fn generate_map_key(ctx: &mut Ctx, typ: &str) -> String {
 }
 
 fn generate_object(ctx: &mut Ctx, class: &GenClass) -> Value {
-    let mut m = Map::new();
-    for f in &class.fields {
-        let mut key = f.name.clone();
-        if m.contains_key(&key) {
-            key = format!("{key}_{}", ctx.rng.below(99));
-        }
-        m.insert(key, generate_value(ctx, &f.type_name));
+    if ctx.depth >= MAX_DEPTH {
+        return Value::Null;
     }
-    Value::Object(m)
+    ctx.depth += 1;
+    let out = {
+        let mut m = Map::new();
+        for f in &class.fields {
+            let mut key = f.name.clone();
+            if m.contains_key(&key) {
+                key = format!("{key}_{}", ctx.rng.below(99));
+            }
+            m.insert(key, generate_value(ctx, &f.type_name));
+        }
+        Value::Object(m)
+    };
+    ctx.depth -= 1;
+    out
 }
 
 // ── CST helpers ──────────────────────────────────────────────────────
@@ -495,6 +506,7 @@ fn main() -> Result<()> {
         classes: HashMap::new(),
         enums: HashMap::new(),
         rng: Rng::seeded(),
+        depth: 0,
     };
     collect_declarations(root, &source, &mut ctx);
 
