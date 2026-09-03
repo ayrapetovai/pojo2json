@@ -1,0 +1,77 @@
+# pojo2json — AI Context
+
+## Purpose
+A Rust CLI that parses Java source files and outputs a random JSON **sample**
+that can be deserialized into the POJO. Unlike the old metadata dumper, it now
+emits values (no business meaning, but correctly typed/structured) for each
+field. Use cases: generating example payloads, docs, test fixtures.
+
+## Build / Run
+- Toolchain: Rust 1.98.1, `stable-x86_64-unknown-linux-gnu` (via rustup).
+- NOTE: the system `/usr/bin/rustup` proxy is BROKEN in this environment — it
+  reads `argv[0]` as the OpenWork AppImage filename and fails with
+  `unknown proxy name: 'openwork-linux-x86_64-0.18.35'`.
+  Workaround: real toolchain binaries are symlinked into `~/.cargo/bin/`
+  (`cargo`, `rustc`), so `cargo` works directly. Build:
+  ```
+  export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/bin:/bin"
+  cargo build
+  cargo run -- path/to/Foo.java          # random sample JSON
+  cargo run -- path/to/Foo.java --tree   # raw CST S-expression (debug)
+  ```
+- Build output dir overridden to `/tmp/pojo2json-target` via `.cargo/config.toml`.
+
+## Dependencies (Cargo.toml)
+- `tree-sitter = "0.27"` + `tree-sitter-java = "0.23.5"`: syntax parsing only.
+  - `Node::named_child_count()` returns `usize`, `named_child(i)` takes `u32` — cast.
+  - Grammar: `let lang: Language = tree_sitter_java::LANGUAGE.into();`.
+- `serde_json` (Map/Value), `clap` (v4 derive), `anyhow`.
+- NO random crate: uses a small xorshift64 PRNG (`Rng`) seeded from `SystemTime`
+  so each run differs. Don't add `rand` unless randomness quality matters.
+
+## Architecture (src/main.rs)
+1. `clap` parse (input file, `--tree` flag).
+2. Read source, `tree_sitter::Parser` → `Tree`.
+3. If `--tree`: print `root.to_sexp()` and exit.
+4. Else: `collect_declarations(root)` walks the FULL tree recursively and fills
+   a `Ctx { classes: HashMap<name, GenClass>, enums: HashMap<name, Vec<const>>, rng }`.
+5. Top-level classes/records/interfaces → `generate_object` each; print pretty JSON.
+
+### Output shape
+- Single top-level class → its object directly (`{"age": 69028, ...}`).
+- Multiple top-level classes → `{ "ClassName": {...}, ... }`.
+
+### Key facts
+- `generate_value(type_str)` parses the type string with `parse_type` into
+  `TypeDesc { base, args: Vec<String>, is_array }` (handles generics nesting and
+  `[]` suffix). Values by base type: primitives/wrappers (bool/int/float/char),
+  `String`, `BigDecimal`/`BigInteger` (as strings), `LocalDate`/`LocalTime`/
+  `LocalDateTime`/`Instant`/`OffsetDateTime`/`ZonedDateTime` (ISO strings),
+  `UUID`, collections→array, `Map`→object (keys stringified via
+  `generate_map_key`), `Optional`→value or `null`, `Object`/`Number`→`null`.
+- Unknown class name → looked up in `ctx.classes` (recursive object) or
+  `ctx.enums` (one random constant), else `null`.
+- Nested classes are found because collection recurses through ALL descendants
+  (`class_declaration`/`interface_declaration`/`record_declaration` →
+  fields; `enum_declaration` → constants). Simple-name lookup is used; sibling
+  classes with equal simple names could collide (acceptable for sample data).
+- Fields: iterate `class_body` `field_declaration` children; each
+  `variable_declarator` becomes one field (multi-declarator split).
+- Records: fields from the record `parameters` `formal_parameter` nodes.
+- `type` node text read directly via `node_text` (no keyword stripping needed —
+  type node is clean; generics/arrays preserved in the string).
+
+## Status
+- Working; `cargo build` and `cargo clippy` clean (no warnings), `cargo fmt` clean.
+- Validated against `UserDto` (matches the intended output format), `OrderDto`
+  (nested classes, enum, Map, List, array, LocalDateTime), `Multi` (records,
+  multiple top-level classes, multi-declarator `double x, y`).
+
+## Roadmap / known limitations
+- Fields keep only `type_name` + `name`; annotations/modifiers/methods metadata
+  dumped in the old version was intentionally dropped.
+- `Map` with non-`String` keys is stringified (JSON keys are always strings).
+- Arrays only generate a shallow dimension (`int[][]` yields inner scalars, not
+  nested arrays).
+- No directory recursion; single file only.
+- No `git` remote configured yet; project initialized locally by `cargo init`.
